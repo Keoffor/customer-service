@@ -9,7 +9,7 @@ import com.kenstudy.bank.BankAddress;
 import com.kenstudy.customer.CustomerAccount;
 import com.kenstudy.customer.CustomerRequestDTO;
 import com.kenstudy.customer.CustomerResponseDTO;
-import com.kenstudy.transaction.TransactionResponseDTO;
+import com.kenstudy.event.status.CustomerStatus;
 import com.kenstudy.transaction.TransferRequestDTO;
 import com.kenstudy.user_service.client.account.CustomersClient;
 import com.kenstudy.user_service.event.BroadCastService;
@@ -20,6 +20,7 @@ import com.kenstudy.user_service.model.Users;
 import com.kenstudy.user_service.model.VerificationToken;
 import com.kenstudy.user_service.repository.UserRepository;
 import com.kenstudy.user_service.repository.VerificationTokenRepo;
+import com.kenstudy.user_service.saga.CustomerPublisher;
 import com.kenstudy.user_service.services.UserService;
 import com.kenstudy.user_service.util.CusTransResponseDto;
 import com.kenstudy.user_service.util.UserHelper;
@@ -34,9 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 
@@ -48,15 +48,20 @@ public class UserServiceImpl implements UserService {
     private final VerificationTokenRepo verificationTokenRepo;
     private final CustomersClient customersClient;
     private final BroadCastService broadCastService;
+    private final CustomerPublisher customerPublisher;
 
     @Autowired
     public UserServiceImpl(UserRepository userRepository, VerificationTokenRepo verificationTokenRepo,
-                   CustomersClient customersClient, BroadCastService broadCastService) {
+           CustomersClient customersClient, BroadCastService broadCastService, CustomerPublisher customerPublisher) {
         this.userRepository = userRepository;
         this.verificationTokenRepo = verificationTokenRepo;
         this.customersClient = customersClient;
         this.broadCastService = broadCastService;
+        this.customerPublisher = customerPublisher;
     }
+
+    @Autowired
+
 
 
     @Override
@@ -107,33 +112,45 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public CusTransResponseDto transferFund(TransferRequestDTO dto) {
-        if (dto == null || dto.getCustomerId() == null ||
-                dto.getRecipientId() == null || dto.getAmount() == null) {
+        if (dto == null || dto.getSenderId() == null ||
+                dto.getRecipientAcctId() == null || dto.getAmount() == null) {
             throw new ResourceNotFoundException("Transfer request or required fields must not be null");
         }
 
-        Optional<Users> users = userRepository.findById(dto.getCustomerId());
-        if (users.isEmpty()) {
-            throw new UserNotFoundException("Customer with ID " + dto.getCustomerId() + " does not exist");
-        }
-        Users user = users.get();
-        String sender = user.getName();
+        List<Integer> ids = Arrays.asList(dto.getSenderId(), dto.getRecipientId());
 
-        CustomerResponseDTO receiver;
-        try {
-            String receiverId = String.valueOf(dto.getRecipientId());
-            receiver = customersClient.get(receiverId);
+        List<Users> users = userRepository.findSenderAndReceiver(ids);
 
-        } catch (ResourceNotFoundException ex) {
-            throw new ResourceNotFoundException("Failed to fetch recipient details: " + ex.getMessage());
+        Map<Integer, Users> mapUsers = users.stream()
+                .collect(Collectors.toConcurrentMap(Users::getId, Function.identity()));
+
+        Users sender = mapUsers.get(dto.getSenderId());
+        Users receiver = mapUsers.get(dto.getRecipientId());
+
+        if (sender == null || receiver == null) {
+            throw new UserNotFoundException("Sender or receiver not found.");
         }
 
-        if (receiver == null) {
-            throw new UserNotFoundException("Receiver Account not found");
+        if (dto.getAmount() < 2 || dto.getAmount() > 10000) {
+            throw new UserNotFoundException("Daily transfer must be from $2 and not exceed $10000");
         }
-        String receiverName = receiver.getName();
+        sender.setStatus(CustomerStatus.TRANSFER_CREATED.name());
+        sender.setLocalDate(LocalDate.now());
 
-        return mapToResponse(customersClient.post(dto), sender, receiverName);
+        receiver.setStatus(CustomerStatus.TRANSFER_CREATED.name());
+        receiver.setLocalDate(LocalDate.now());
+
+       try {
+           //persist data
+           userRepository.saveAll(Arrays.asList(sender, receiver));
+           dto.setStatus(CustomerStatus.TRANSFER_CREATED.name());
+           //produce event
+           customerPublisher.publishCustomerEvent(dto,CustomerStatus.TRANSFER_CREATED);
+       }catch (ResourceNotFoundException e){
+           throw  new ResourceNotFoundException("Fund Transfer was unsuccessful");
+       }
+
+        return mapToResponse(dto, sender, receiver.getName());
     }
 
     @Override
@@ -172,14 +189,12 @@ public class UserServiceImpl implements UserService {
     }
 
 
-    private CusTransResponseDto mapToResponse(TransactionResponseDTO dto, String sender, String receiverName) {
+    private CusTransResponseDto mapToResponse(TransferRequestDTO dto, Users sender, String receiverName) {
         CusTransResponseDto res = new CusTransResponseDto();
-        res.setTransferBy(sender);
+        res.setTransferBy(sender.getName());
         res.setAmount(dto.getAmount());
         res.setDescription(dto.getDescription());
-        res.setCreatedDated(dto.getCreatedDated());
-        res.setTransactionType(dto.getTransactionType());
-        res.setTransactionId(dto.getTransactionId());
+        res.setCreatedDated(sender.getLocalDate());
         res.setReceiver(receiverName);
         return res;
     }
