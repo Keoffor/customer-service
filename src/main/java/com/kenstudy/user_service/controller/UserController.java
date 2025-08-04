@@ -50,8 +50,6 @@ public class UserController {
         String result = userService.confirmRegistration(verifyToken, request);
         return ResponseEntity.status(HttpStatus.OK).body(result);
 
-
-
     }
 
     @GetMapping("/{userId}")

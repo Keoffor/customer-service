@@ -9,6 +9,7 @@ import com.kenstudy.bank.BankAddress;
 import com.kenstudy.customer.CustomerAccount;
 import com.kenstudy.customer.CustomerRequestDTO;
 import com.kenstudy.customer.CustomerResponseDTO;
+import com.kenstudy.event.CustomerEvent;
 import com.kenstudy.event.status.CustomerStatus;
 import com.kenstudy.transaction.TransferRequestDTO;
 import com.kenstudy.user_service.client.account.CustomersClient;
@@ -144,8 +145,10 @@ public class UserServiceImpl implements UserService {
            //persist data
            userRepository.saveAll(Arrays.asList(sender, receiver));
            dto.setStatus(CustomerStatus.TRANSFER_CREATED.name());
+           CustomerEvent cusEvent = new CustomerEvent(dto, CustomerStatus.TRANSFER_CREATED,
+                   "", false);
            //produce event
-           customerPublisher.publishCustomerEvent(dto,CustomerStatus.TRANSFER_CREATED);
+           customerPublisher.publishCustomerEvent(cusEvent);
        }catch (ResourceNotFoundException e){
            throw  new ResourceNotFoundException("Fund Transfer was unsuccessful");
        }
