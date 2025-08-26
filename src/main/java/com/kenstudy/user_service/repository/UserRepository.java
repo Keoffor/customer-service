@@ -11,7 +11,7 @@ public interface UserRepository extends JpaRepository<Users, Integer> {
 
     boolean existsByEmail(String email);
 
-    @Query("SELECT c FROM Customer c WHERE c.id IN (:ids)")
+    @Query(value = "SELECT * FROM customer WHERE id IN (:ids)", nativeQuery = true)
     List<Users> findSenderAndReceiver(@Param("ids") List<Integer> ids);
 
 }

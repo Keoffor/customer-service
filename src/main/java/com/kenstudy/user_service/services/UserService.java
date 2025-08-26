@@ -23,4 +23,5 @@ public interface UserService {
     VerificationToken getVerifiedToken (String token);
 
     String confirmRegistration(VerificationToken verifier, HttpServletRequest request);
+    CusTransResponseDto getTransferStatus(String correlationId);
 }

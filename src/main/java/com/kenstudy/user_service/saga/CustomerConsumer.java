@@ -6,39 +6,57 @@ import com.kenstudy.event.status.CustomerStatus;
 import com.kenstudy.event.status.TransStatus;
 import com.kenstudy.transaction.TransferRequestDTO;
 import com.kenstudy.utils.CancelUtility;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
 
-import java.util.function.Function;
+import java.util.UUID;
+import java.util.function.Consumer;
 
-@Configuration
+@Component
+@Slf4j
 public class CustomerConsumer {
-    private final ConstumerHandler handler;
+    private final CustomerHandler handler;
 
     @Autowired
-    public CustomerConsumer(ConstumerHandler handler) {
+    public CustomerConsumer(CustomerHandler handler) {
         this.handler = handler;
     }
 
 
     @Bean
-    public Function<TransactEvent, CustomerEvent> updateTransactionAccount() {
-        return this::processConsumeEventTransact;
+    public Consumer<TransactEvent> customerEventSuccess() {
+        return transEvent -> {
+            log.info("catch success event {} ",transEvent.getCustomerEventId());
+            if (!transEvent.isError() || TransStatus.TRANSACTION_COMPLETED.equals(transEvent.getTransStatus())) {
+                handleTransactSuccess(transEvent.getTransRequestDTO(), transEvent.getCustomerEventId());
+            } else {
+                // optional logging if a bad event sneaks in
+                log.warn("Received unexpected event on transactEventSuccess: {}", transEvent);
+            }
+        };
     }
-    private CustomerEvent processConsumeEventTransact(TransactEvent transactEvent) {
-        if (TransStatus.TRANSACTION_COMPLETED.equals(transactEvent.getTransStatus())
-                && transactEvent.isEventClosed()) {
-            return this.handler.updateTransactConsumeEvent(transactEvent);
-        } else {
-            CustomerEvent customerEvent = new CustomerEvent();
-            TransferRequestDTO dto = transactEvent.getTransRequestDTO();
-            customerEvent.setTransRequestDTO(dto);
-            return CancelUtility.cancelEventUtility(customerEvent,
-                    dto,
-                    customerEvent.getErrorMessage(),
-                    CustomerStatus.TRANSFER_FAILED);
-        }
+    @Bean
+    public Consumer<TransactEvent> customerEventFailure() {
+        return transEvent -> {
+            log.info("catch failure event {} ",transEvent.getCustomerEventId());
+            if (transEvent.isError() || TransStatus.TRANSACTION_FAILED.equals(transEvent.getTransStatus())) {
+                handleFailure(transEvent);
+            } else {
+
+                log.warn("Received non-error event on transactEventFailure: {}", transEvent);
+            }
+        };
     }
+
+    private void handleTransactSuccess(TransferRequestDTO dto, UUID cusId) {
+        handler.updateTransactConsumeEvent(dto, cusId);
+    }
+    private void handleFailure(TransactEvent transactEvent) {
+        handler.handleTransactFailure(transactEvent);
+    }
+
+
 
 }

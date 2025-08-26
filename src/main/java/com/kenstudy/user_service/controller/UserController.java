@@ -8,6 +8,7 @@ import com.kenstudy.transaction.TransferRequestDTO;
 import com.kenstudy.user_service.exception.TokenNotFoundException;
 import com.kenstudy.user_service.model.Users;
 import com.kenstudy.user_service.model.VerificationToken;
+import com.kenstudy.user_service.saga.CustomerHandler;
 import com.kenstudy.user_service.services.UserService;
 import com.kenstudy.user_service.util.CusTransResponseDto;
 import jakarta.servlet.http.HttpServletRequest;
@@ -24,16 +25,18 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Locale;
 
-@Controller
+@RestController
 @RequestMapping("/v1/bank")
 @Slf4j
 public class UserController {
 
     private final UserService userService;
+    private final CustomerHandler customerHandler;
 
     @Autowired
-    public UserController(UserService userService) {
+    public UserController(UserService userService, CustomerHandler customerHandler) {
         this.userService = userService;
+        this.customerHandler = customerHandler;
     }
 
     @PostMapping("/add")
@@ -62,6 +65,12 @@ public class UserController {
     public ResponseEntity<CusTransResponseDto>transferFund(@RequestBody TransferRequestDTO requestDTO){
         CusTransResponseDto cusTransResponseDto = userService.transferFund(requestDTO);
         return ResponseEntity.status(HttpStatus.CREATED).body(cusTransResponseDto);
+    }
+
+    @GetMapping("transfer/{correlationId}/status")
+    public ResponseEntity<CusTransResponseDto>transferStatus(@PathVariable String correlationId){
+        CusTransResponseDto cusTransResponseDto = userService.getTransferStatus(correlationId);
+        return ResponseEntity.status(HttpStatus.OK).body(cusTransResponseDto);
     }
 
 

@@ -16,9 +16,8 @@ public class CustomerPublisherConfig {
 
         return Sinks.many().multicast().onBackpressureBuffer();
     }
-
     @Bean
-    public Supplier<Flux<CustomerEvent>> usersSupplier(Sinks.Many<CustomerEvent> sinks){
+    public Supplier<Flux<CustomerEvent>> customerSupplier(Sinks.Many<CustomerEvent> sinks){
 
         return sinks::asFlux;
     }

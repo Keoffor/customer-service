@@ -9,6 +9,7 @@ import com.kenstudy.bank.BankAddress;
 import com.kenstudy.customer.CustomerAccount;
 import com.kenstudy.customer.CustomerRequestDTO;
 import com.kenstudy.customer.CustomerResponseDTO;
+
 import com.kenstudy.event.CustomerEvent;
 import com.kenstudy.event.status.CustomerStatus;
 import com.kenstudy.transaction.TransferRequestDTO;
@@ -16,11 +17,15 @@ import com.kenstudy.user_service.client.account.CustomersClient;
 import com.kenstudy.user_service.event.BroadCastService;
 import com.kenstudy.user_service.exception.ResourceNotFoundException;
 import com.kenstudy.user_service.exception.TokenNotFoundException;
+import com.kenstudy.user_service.exception.TransactionFailedException;
 import com.kenstudy.user_service.exception.UserNotFoundException;
+import com.kenstudy.user_service.model.TransferStatus;
 import com.kenstudy.user_service.model.Users;
 import com.kenstudy.user_service.model.VerificationToken;
+import com.kenstudy.user_service.repository.TransferStatusRepo;
 import com.kenstudy.user_service.repository.UserRepository;
 import com.kenstudy.user_service.repository.VerificationTokenRepo;
+import com.kenstudy.user_service.saga.CustomerHandler;
 import com.kenstudy.user_service.saga.CustomerPublisher;
 import com.kenstudy.user_service.services.UserService;
 import com.kenstudy.user_service.util.CusTransResponseDto;
@@ -37,6 +42,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -48,22 +57,21 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final VerificationTokenRepo verificationTokenRepo;
     private final CustomersClient customersClient;
+    private final TransferStatusRepo transStatusRepo;
     private final BroadCastService broadCastService;
     private final CustomerPublisher customerPublisher;
-
+    public static ConcurrentHashMap<Integer, String> catchEventId = new ConcurrentHashMap<>();
     @Autowired
     public UserServiceImpl(UserRepository userRepository, VerificationTokenRepo verificationTokenRepo,
-           CustomersClient customersClient, BroadCastService broadCastService, CustomerPublisher customerPublisher) {
+                           CustomersClient customersClient, BroadCastService broadCastService,
+                           CustomerPublisher customerPublisher, TransferStatusRepo transStatusRepo) {
         this.userRepository = userRepository;
         this.verificationTokenRepo = verificationTokenRepo;
         this.customersClient = customersClient;
         this.broadCastService = broadCastService;
         this.customerPublisher = customerPublisher;
+        this.transStatusRepo = transStatusRepo;
     }
-
-    @Autowired
-
-
 
     @Override
     @Transactional
@@ -113,6 +121,8 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public CusTransResponseDto transferFund(TransferRequestDTO dto) {
+        TransferStatus status = new TransferStatus();
+
         if (dto == null || dto.getSenderId() == null ||
                 dto.getRecipientAcctId() == null || dto.getAmount() == null) {
             throw new ResourceNotFoundException("Transfer request or required fields must not be null");
@@ -135,25 +145,27 @@ public class UserServiceImpl implements UserService {
         if (dto.getAmount() < 2 || dto.getAmount() > 10000) {
             throw new UserNotFoundException("Daily transfer must be from $2 and not exceed $10000");
         }
-        sender.setStatus(CustomerStatus.TRANSFER_CREATED.name());
-        sender.setLocalDate(LocalDate.now());
 
-        receiver.setStatus(CustomerStatus.TRANSFER_CREATED.name());
-        receiver.setLocalDate(LocalDate.now());
-
-       try {
-           //persist data
-           userRepository.saveAll(Arrays.asList(sender, receiver));
-           dto.setStatus(CustomerStatus.TRANSFER_CREATED.name());
-           CustomerEvent cusEvent = new CustomerEvent(dto, CustomerStatus.TRANSFER_CREATED,
+        //publish event
+           dto.setStatus(CustomerStatus.PENDING.name());
+           CustomerEvent cusEvent = new CustomerEvent(dto, false,CustomerStatus.PENDING,
                    "", false);
+
+        //persist data
+        String corrId = String.valueOf(cusEvent.getEventId()).trim();
+
+        catchEventId.put(sender.getId(), corrId);
+
+        status.setStatus(CustomerStatus.PENDING.name());
+        status.setDateTime(LocalDateTime.now());
+        status.setCorrelationId(corrId);
+        transStatusRepo.save(status);
+
            //produce event
            customerPublisher.publishCustomerEvent(cusEvent);
-       }catch (ResourceNotFoundException e){
-           throw  new ResourceNotFoundException("Fund Transfer was unsuccessful");
-       }
+           //return response
+         return mapToResponse(dto,sender, receiver.getName(),cusEvent.getEventId());
 
-        return mapToResponse(dto, sender, receiver.getName());
     }
 
     @Override
@@ -191,14 +203,34 @@ public class UserServiceImpl implements UserService {
         }
     }
 
+    @Override
+    public CusTransResponseDto getTransferStatus(String correlationId) {
 
-    private CusTransResponseDto mapToResponse(TransferRequestDTO dto, Users sender, String receiverName) {
+        return transStatusRepo.findByCorrelationId(correlationId)
+                .map(tranStatus -> {
+                    CusTransResponseDto response = new CusTransResponseDto();
+                    response.setTransactionType("Transfer");
+                    response.setStatus(tranStatus.getStatus());
+                    response.setTransactId(tranStatus.getTransactId());
+                    response.setTransferEventId(tranStatus.getCorrelationId());
+                    response.setCreatedDated(tranStatus.getDateTime());
+                    response.setReason(tranStatus.getReason());
+                    return response;
+                }).orElseThrow(() -> new TransactionFailedException("correlation Id = " + correlationId + " not found"));
+    }
+
+
+
+    private CusTransResponseDto mapToResponse(TransferRequestDTO dto, Users sender, String receiverName, UUID transId) {
         CusTransResponseDto res = new CusTransResponseDto();
         res.setTransferBy(sender.getName());
         res.setAmount(dto.getAmount());
         res.setDescription(dto.getDescription());
-        res.setCreatedDated(sender.getLocalDate());
+        res.setCreatedDated(sender.getLocalDate().atStartOfDay());
         res.setReceiver(receiverName);
+        res.setStatus(CustomerStatus.PENDING.name());
+        res.setTransferEventId(String.valueOf(transId));
+        res.setTransactionType("Transfer");
         return res;
     }
 

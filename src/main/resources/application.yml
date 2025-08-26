@@ -9,13 +9,31 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
-    show-sql: true
     hibernate:
       ddl-auto: update
     properties:
       hibernate:
         format_sql: false
         dialect: org.hibernate.dialect.MySQLDialect
+
+
+  cloud:
+    function:
+      definition: customerSupplier;customerEventSuccess;customerEventFailure
+    stream:
+      default:
+        contentType: application/json
+      bindings:
+        customerSupplier-out-0:
+          destination: customerEvent
+        customerEventSuccess-in-0:
+          destination: transactEventSuccess
+        customerEventFailure-in-0:
+          destination: transactEventFailure
+
+      kafka:
+        binder:
+          brokers: localhost:9092
 
 logging:
   level:

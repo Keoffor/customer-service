@@ -26,13 +26,4 @@ public class CustomerPublisher {
         }
     }
 
-    public void publishTransactEvent(CustomerEvent event) {
-        Sinks.EmitResult result = usersSinks.tryEmitNext(event);
-
-        if (result.isFailure()) {
-            log.error(" Failed to emit CustomersEvent:::====:::::: {} ", result.name());
-            throw new ResourceNotFoundException("Failed to emit CustomerEVent: " + result.name());
-        }
-
-    }
 }
